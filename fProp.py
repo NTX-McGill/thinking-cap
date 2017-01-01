@@ -1,2 +1,2 @@
 from DeepEEG import getState
-getState('EmilySnook',5,20)
+getState('EmilySnook',1,1)

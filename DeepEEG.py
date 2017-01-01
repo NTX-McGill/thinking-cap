@@ -52,11 +52,37 @@ def getJsonData(dataPath):
 	with open(dataPath) as infile:
 		res = json.load(infile)
 	for timeStamp in res['data']:
-		data.append(numpy.array(timeStamp['channel_values'],dtype='float32'))		
+		data.append(numpy.array(timeStamp['channel_values'],dtype='float32'))	
+
 	data = numpy.stack(data,axis=1)
 	data = numpy.resize(data,(data.shape[0],300000))
+	trainOut = numpy.tile(trainOut,(data.shape[0],1)) # for the one dimensional convoluions. set 8 to 1 when using multiple dimensional convolutions
 	data = OrderedDict(input=numpy.array(data, dtype='float32'), truth=numpy.array(trainOut, dtype='float32'))
 	return data
+
+
+def createModernNetwork(dimensions,input_var):
+	#dimensions = (data.shape[0],1,data.shape[1])
+	print ("Creating Network...")
+
+	print ('Input Layer:')
+	network = lasagne.layers.InputLayer(shape=dimensions,input_var=input_var)
+	print '	',lasagne.layers.get_output_shape(network)
+
+	print ('Hidden Layer:')
+	network = lasagne.layers.Conv1DLayer(network, num_filters=15, filter_size=(5), pad ='same',nonlinearity=lasagne.nonlinearities.rectify)
+	network = lasagne.layers.MaxPool1DLayer(network,pool_size=(2))
+	print '	',lasagne.layers.get_output_shape(network)
+
+	network = lasagne.layers.Conv1DLayer(network, num_filters=20, filter_size=(5), pad='same',nonlinearity=lasagne.nonlinearities.rectify)
+	network = lasagne.layers.MaxPool1DLayer(network,pool_size=(2))
+	print '	',lasagne.layers.get_output_shape(network)
+
+	print ('Output Layer:')
+	network = lasagne.layers.DenseLayer(network, num_units=2, nonlinearity = lasagne.nonlinearities.softmax)
+	print '	',lasagne.layers.get_output_shape(network)
+
+	return network
 
 def createNetwork(dimensions, input_var):
 	#dimensions = (1,1,data.shape[0],data.shape[1]) #We have to specify the input size because of the dense layer
@@ -186,7 +212,7 @@ def validateNetwork(network,input_var,validationSet):
 	truePos=falsePos=trueNeg=falseNeg = 0
 	for sample in validationSet:
 		data = getJsonData(sample)
-		trainIn = data['input'].reshape([1,1] + list(data['input'].shape))
+		trainIn = data['input'].reshape([data['input'].shape[0]] + [1] + [data['input'].shape[1]])
 
 		print ("Sample: %s"%sample)
 		if test_fn(trainIn)[0,0] == 1:
@@ -208,7 +234,7 @@ def validateNetwork(network,input_var,validationSet):
 #output: json file with date,personName (YYYY/MM/DD/HH/DD)
 def getState(name,timeInterval,recordDuration):
 	dataPath = os.path.join('data',name)
-	input_var = T.tensor4('input')
+	input_var = T.tensor3('input')
 	timeDelay = 3 #time to start up bci tool in seconds
 	txtFile = open("%s/History.txt"%dataPath,'a')
 	txtFile.write(str(time.time()))#time.strftime("%c")
@@ -220,10 +246,10 @@ def getState(name,timeInterval,recordDuration):
 	data = getJsonData(os.path.join(dataPath,'%s.json'%name))
 
 	print ("Creating Network...")
-	networkDimensions = (1,1,data['input'].shape[0],data['input'].shape[1])
-	network  = createNetwork(networkDimensions, input_var)
+	networkDimensions = ([data['input'].shape[0]] + [1] + [data['input'].shape[1]])
+	network  = createModernNetwork(networkDimensions, input_var)
 	print ('loading a previously trained model...\n')
-	network = loadModel(network,'networks/Emily2Layer300000.npz')
+	network = loadModel(network,'Emily.npz')
 	out = lasagne.layers.get_output(network)
 	test_fn = theano.function([input_var],out)
 	try:
@@ -231,7 +257,7 @@ def getState(name,timeInterval,recordDuration):
 		while(timeElapsed<recordDuration):
 			timeElapsed+=timeInterval
 			data = getJsonData(os.path.join(dataPath,'%s.json'%name))
-			inputSample = data['input'].reshape([1,1] + list(data['input'].shape))
+			inputSample = data['input'].reshape([data['input'].shape[0]] + [1] + [data['input'].shape[1]])
 			prediction = test_fn(inputSample)[0,0]
 			txtFile = open("%s/History.txt"%dataPath,'a')
 			txtFile.write(str(int(prediction)))
@@ -258,14 +284,14 @@ def main():
 	testReserve = 0.2
 	validationReserve = 0.2
 	trainingReserve = 1-(testReserve+validationReserve)
-	input_var = T.tensor4('input')
+	input_var = T.tensor3('input')
 	y = T.dmatrix('truth')
 
-	trainFromScratch = False
+	trainFromScratch = True
 	epochs = 10
 	samplesperEpoch = 10
 	trainTime = 0.01 #in hours
-	modelName='Emily2LayerNew'
+	modelName='Emily'
 	dataSet = []
 
 	for patient in [dataPath]:
@@ -286,9 +312,8 @@ def main():
 
 	inputDim = getJsonData(trainingSet[0])
 
-	
-	networkDimensions = (1,1,inputDim['input'].shape[0],inputDim['input'].shape[1])
-	network  = createNetwork(networkDimensions, input_var)
+	networkDimensions = (inputDim['input'].shape[0],1,inputDim['input'].shape[1])
+	network  = createModernNetwork(networkDimensions, input_var)
 	trainer = createTrainer(network,input_var,y)
 
 	validator = createValidator(network,input_var,y)
@@ -312,13 +337,16 @@ def main():
 		for i in xrange(samplesperEpoch):
 			chooseRandomly = numpy.random.randint(len(trainingSet))
 			data = getJsonData(trainingSet[chooseRandomly])
-			trainIn = data['input'].reshape([1,1] + list(data['input'].shape))
+
+			trainIn = data['input'].reshape([data['input'].shape[0]] + [1] + [data['input'].shape[1]])
+
 			trainer(trainIn, data['truth'])
 
 		chooseRandomly = numpy.random.randint(len(testSet))
 		print ("Gathering data...%s"%testSet[chooseRandomly])
 		data = getJsonData(testSet[chooseRandomly])
-		trainIn = data['input'].reshape([1,1] + list(data['input'].shape))
+		#trainIn = data['input'].reshape([1,1] + list(data['input'].shape))
+		trainIn = data['input'].reshape([data['input'].shape[0]] + [1] + [data['input'].shape[1]])
 		error, accuracy = validator(trainIn, data['truth'])			     #pass modified data through network
 		record['error'].append(error)
 		record['accuracy'].append(accuracy)
