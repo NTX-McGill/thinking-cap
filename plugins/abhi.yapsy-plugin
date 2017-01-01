@@ -1,0 +1,8 @@
+[Core]
+Name = abhi
+Module = abhi
+
+[Documentation]
+Author = Abhishek Gupta
+Version = 0.1
+Description = Stream csv data
